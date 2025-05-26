@@ -23,6 +23,7 @@ public class CarController : MonoBehaviour
     public AnimationCurve velocityToTurningCurve;
     public float turnStrengthVelocityCheckMultiplier;
     protected float lastTurnInput;
+    private bool hasGrip;
     
     [Header("Acceleration")]
     public float reverseAccel = 2;
@@ -44,7 +45,7 @@ public class CarController : MonoBehaviour
     // Start is called before the first frame update
     private int currentAccel;
 
-    private bool isReversing, isGrounded;
+    protected bool isReversing, isGrounded;
     public bool isDrifting {get; set;}
 
     public static float currentSpeed {get; private set;}
@@ -79,6 +80,13 @@ public class CarController : MonoBehaviour
     private Vector3 backLeftBaseTransform;
     private float turnAmount;
 
+    [Header("Audio")]
+    [SerializeField] private AudioClip accel;
+    [SerializeField] private AudioClip drift;
+    [SerializeField] private AudioClip thud;
+
+
+
 
     void Awake()
     {
@@ -102,7 +110,6 @@ public class CarController : MonoBehaviour
     void FixedUpdate()
     {
         AdjustCarRotation();
-        CheckGrounded();
         DriftCheck();
         if (isGrounded)
         {
@@ -110,32 +117,27 @@ public class CarController : MonoBehaviour
             Turn();
             Acceleration();
         }
+        else
+        {
+            Unstuck();
+        }
         currentSpeed = rb.velocity.magnitude;
     }
-    #region Checks
-    void CheckGrounded()
-    {
-        // Raycast from the car downwards
-        isGrounded = Physics.Raycast(transform.position, Vector3.down, out RaycastHit hit, groundCheckDistance, groundLayer);
 
-        // Optional: Debug ray for visualization in the editor
-        Debug.DrawRay(transform.position, Vector3.down * groundCheckDistance, isGrounded ? Color.green : Color.red);
-    }
-    #endregion
     #region Input
     public virtual void GetInputs()
     {
         verticalInput = InputManager.Movement.y;
         turnInput = InputManager.Movement.x;
-        if (InputManager.hasPressedDriftButton)
+        if (InputManager.hasPressedDriftButton && isGrounded)
         {
             isDrifting = true;
         } 
-        else if (InputManager.hasReleasedDriftButton) 
+        else if (InputManager.hasReleasedDriftButton || !isGrounded)
         {
             isDrifting = false;
-
         }
+      
     }
     #endregion
 
@@ -144,9 +146,11 @@ public class CarController : MonoBehaviour
     {
         if (isDrifting)
         {
+
             turnStrength = driftTurnStrength;
             rb.drag = driftDrag;
             rb.angularDrag = 0.1f;
+            hasGrip = false;
             startEmmiter();
 
         }
@@ -162,23 +166,41 @@ public class CarController : MonoBehaviour
 
     private void Acceleration()
     {
-        if (verticalInput > 0)
+
+        if (verticalInput < 0 && isReversing)
         {
-            speedInput = verticalInput *Accel * 1000f;
-            rb.AddForce((forwardDirection.normalized + transform.forward)/2 * speedInput);
-        }  
-        else if (verticalInput < 0 && isReversing)
-        {
-            speedInput = verticalInput *reverseAccel * 1000f;
-            rb.AddForce((forwardDirection.normalized + transform.forward)/2 * speedInput);
+            speedInput = verticalInput * reverseAccel * 1000f;
+            rb.velocity = forwardDirection.normalized * -rb.velocity.magnitude;
+       
             
-        } 
+            rb.AddForce(forwardDirection.normalized* speedInput);
+
+        }
         else if (verticalInput < 0 && isDrifting)
         {
-            speedInput = verticalInput *reverseAccel * 200f;
-            rb.AddForce((forwardDirection.normalized + transform.forward)/2 * speedInput);
-            
-        } 
+            speedInput = verticalInput * reverseAccel * 200f;
+            rb.velocity = forwardDirection.normalized * -rb.velocity.magnitude;
+            rb.AddForce(forwardDirection.normalized * speedInput);
+
+        }
+        else if (verticalInput > 0 && !isReversing)
+        {
+            if (Vector3.Dot(rb.velocity.normalized, forwardDirection.normalized) > 0.99f && !isDrifting)
+            {
+                hasGrip = true;
+            }
+           
+
+            speedInput = verticalInput * Accel * 1000f;
+            if (hasGrip && !isDrifting)
+            {
+                rb.velocity = forwardDirection.normalized * rb.velocity.magnitude;
+            }
+            rb.AddForce(forwardDirection.normalized  * speedInput);
+
+        }
+ 
+
  
     }
 
@@ -223,7 +245,7 @@ public class CarController : MonoBehaviour
 
                 timeAtMaxVelocity = 0;
                 Accel = velocityMatrices[currentAccel].force;
-                if (verticalInput < 0 )
+                if (verticalInput < 0 && rb.velocity.magnitude < 1f)
                 {
                     timeToReverse += Time.deltaTime;
                     if (timeToReverse > timeReverseThreshold)
@@ -231,7 +253,7 @@ public class CarController : MonoBehaviour
                         isReversing = true;
                     }
                 }
-                else
+                else if (verticalInput > 0  && rb.velocity.magnitude < 1f)
                 {
                     isReversing = false;
                     timeToReverse = 0;
@@ -282,6 +304,19 @@ public class CarController : MonoBehaviour
         }
 
     }
+
+    private void Unstuck()
+    {
+        speedInput = verticalInput * Accel * 10f;
+        rb.AddForce(forwardDirection.normalized  * speedInput);
+
+        float turningCurve = Math.Abs(Vector3.Dot(rb.velocity, transform.forward)) * turnStrengthVelocityCheckMultiplier;
+        Quaternion turnRotation;
+        turnRotation = Quaternion.Euler(0f, (lastTurnInput * 0.1f + turnInput * 0.1f) * turnStrength * velocityToTurningCurve.Evaluate(turningCurve) * Time.deltaTime, 0f);
+        rb.MoveRotation(rb.rotation * turnRotation);
+   
+
+    }
     #endregion
 
     #region Effects
@@ -304,7 +339,7 @@ public class CarController : MonoBehaviour
 
     #region CarRotation
 
-    private void AdjustCarRotation()
+    protected virtual void AdjustCarRotation()
     {
         //calculate location
         Vector3 averageFrontWheelPosition = (frontRight.transform.position + frontLeft.transform.position) / 2f;
@@ -341,7 +376,7 @@ public class CarController : MonoBehaviour
 
         //detect ground and adjust wheel position and rotation
         //front
-        if (Physics.Raycast(frontRight.transform.position, Vector3.down, out RaycastHit hitFrontRightUp, wheelCheckCollider, groundLayer) && Vector3.Distance(hitFrontRightUp.point + Vector3.up * frontRightCollider.radius * frontRight.transform.localScale.x, frontRightBaseTransform) > wheelCheckCollider*10 + 1f)
+        if (Physics.Raycast(frontRight.transform.position + Vector3.up*wheelCheckCollider*2, Vector3.down, out RaycastHit hitFrontRightUp, wheelCheckCollider*3f, groundLayer) && Vector3.Distance(hitFrontRightUp.point + Vector3.up * frontRightCollider.radius * frontRight.transform.localScale.x, frontRightBaseTransform) > wheelCheckCollider)
         {
             frontRight.transform.position = hitFrontRightUp.point + Vector3.up * frontRightCollider.radius * frontRight.transform.localScale.x;
         }
@@ -349,7 +384,7 @@ public class CarController : MonoBehaviour
         {
             frontRight.transform.localPosition = Vector3.Lerp(frontRight.transform.localPosition,frontRightBaseTransform,0.1f);
         }
-        if (Physics.Raycast(frontLeft.transform.position, Vector3.down, out RaycastHit hitFrontLeftUp, wheelCheckCollider, groundLayer) && Vector3.Distance(hitFrontLeftUp.point + Vector3.up * frontLeftCollider.radius * frontLeft.transform.localScale.x, frontLeftBaseTransform) > wheelCheckCollider*10 + 1f)
+        if (Physics.Raycast(frontLeft.transform.position + Vector3.up*wheelCheckCollider*2, Vector3.down, out RaycastHit hitFrontLeftUp, wheelCheckCollider*3f, groundLayer) && Vector3.Distance(hitFrontLeftUp.point + Vector3.up * frontLeftCollider.radius * frontLeft.transform.localScale.x, frontLeftBaseTransform) > wheelCheckCollider)
         {
             frontLeft.transform.position = hitFrontLeftUp.point + Vector3.up * frontLeftCollider.radius * frontLeft.transform.localScale.x;
         }
@@ -357,22 +392,30 @@ public class CarController : MonoBehaviour
         {
             frontLeft.transform.localPosition = Vector3.Lerp(frontLeft.transform.localPosition,frontLeftBaseTransform,0.1f);
         }
+        //main body ground detection
+        if (Physics.Raycast(transform.position, Vector3.down, wheelCheckCollider*2, groundLayer))
+        {
+            isGrounded = true;
+        }
+        else
+        {
+            isGrounded = false;
+        }
+
 
         //back
-        if (Physics.Raycast(backRight.transform.position, Vector3.down, out RaycastHit hitBackRightUp, wheelCheckCollider, groundLayer) && Vector3.Distance(hitBackRightUp.point + Vector3.up * backRightCollider.radius * backRight.transform.localScale.x, backRightBaseTransform) > wheelCheckCollider*10 + 1f)
+        if (Physics.Raycast(backRight.transform.position + Vector3.up*wheelCheckCollider*2, Vector3.down, out RaycastHit hitBackRightUp, wheelCheckCollider*2.8f, groundLayer) && Vector3.Distance(hitBackRightUp.point + Vector3.up * backRightCollider.radius * backRight.transform.localScale.x, backRightBaseTransform) > wheelCheckCollider)
         {
             backRight.transform.position = hitBackRightUp.point + Vector3.up * backRightCollider.radius * backRight.transform.localScale.x;
             backRight.transform.Rotate(Vector3.down, rotateWheel, Space.Self);
 
+
         }
         else
         {
-            backRight.transform.localPosition = Vector3.Lerp(backRight.transform.localPosition,backRightBaseTransform,0.1f);
+            backRight.transform.localPosition = Vector3.Lerp(backRight.transform.localPosition, backRightBaseTransform, 0.1f);
         }
-
-        
-
-        if (Physics.Raycast(backLeft.transform.position, Vector3.down, out RaycastHit hitBackLeftUp, wheelCheckCollider, groundLayer) && Vector3.Distance(hitBackLeftUp.point + Vector3.up * backLeftCollider.radius * backLeft.transform.localScale.x, backLeftBaseTransform) > wheelCheckCollider*10 + 1f)
+        if (Physics.Raycast(backLeft.transform.position + Vector3.up*wheelCheckCollider*2, Vector3.down, out RaycastHit hitBackLeftUp, wheelCheckCollider*2.8f, groundLayer) && Vector3.Distance(hitBackLeftUp.point + Vector3.up * backLeftCollider.radius * backLeft.transform.localScale.x, backLeftBaseTransform) > wheelCheckCollider)
         {
             backLeft.transform.position = hitBackLeftUp.point + Vector3.up * backLeftCollider.radius * backLeft.transform.localScale.x;
             backLeft.transform.Rotate(Vector3.down, rotateWheel, Space.Self);
@@ -382,6 +425,7 @@ public class CarController : MonoBehaviour
         {
             backLeft.transform.localPosition = Vector3.Lerp(backLeft.transform.localPosition,backLeftBaseTransform,0.1f);
         }
+
 
         //apply rotation to the carbody for drifting
         if (isDrifting && lastTurnInput > 0.3f)
@@ -409,7 +453,6 @@ public class CarController : MonoBehaviour
         frontLeft.transform.localPosition = new Vector3 (frontLeftBaseTransform.x, frontLeft.transform.localPosition.y, frontLeftBaseTransform.z);
         backRight.transform.localPosition = new Vector3 (backRightBaseTransform.x, backRight.transform.localPosition.y, backRightBaseTransform.z);
         backLeft.transform.localPosition = new Vector3 (backLeftBaseTransform.x, backLeft.transform.localPosition.y, backLeftBaseTransform.z);
-
 
         
 

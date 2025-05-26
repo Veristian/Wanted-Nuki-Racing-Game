@@ -34,7 +34,7 @@ public class ParticleController : MonoBehaviour
         else
         {
             CarBoost.Stop();
-            CarSmoke.Play();
+//CarSmoke.Play();
         }
         
     }

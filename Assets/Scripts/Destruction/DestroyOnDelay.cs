@@ -4,7 +4,7 @@ using UnityEngine;
 
 public class DestroyOnDelay : MonoBehaviour
 {
-    [SerializeField] private float delay = 2f; // Delay in seconds before destruction
+    [SerializeField] public float delay = 2f; // Delay in seconds before destruction
     [HideInInspector] public bool startDestroy = false;
     private bool isDestroyed = false;
     private void Update()

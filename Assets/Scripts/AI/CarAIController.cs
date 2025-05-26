@@ -64,4 +64,9 @@ public class CarAIController : CarController
         
         
     }
+
+    protected override void AdjustCarRotation()
+    {
+        isGrounded = true;
+    }
 }
